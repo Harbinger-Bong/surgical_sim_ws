@@ -2,6 +2,19 @@ build/
 install/
 log/
 
+__pycache__/
+*.pyc
+
+*.pt
+*.pth
+*.onnx
+
+*.zip
+
+*vosk-model*build/
+install/
+log/
+
 data/
 models/
 
