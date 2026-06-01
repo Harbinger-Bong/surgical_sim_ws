@@ -1,0 +1,11 @@
+build/
+install/
+log/
+
+data/
+models/
+
+*.pyc
+__pycache__/
+.vscode/
+.idea/

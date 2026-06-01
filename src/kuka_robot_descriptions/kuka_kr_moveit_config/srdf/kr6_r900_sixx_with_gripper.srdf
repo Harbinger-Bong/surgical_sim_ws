@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<robot name="kr6_r900_sixx_with_gripper">
+
+  <group name="manipulator">
+    <chain base_link="base_link" tip_link="tool0"/>
+  </group>
+
+  <end_effector name="end_effector" parent_link="tool0" group="manipulator"/>
+
+  <group_state name="home" group="manipulator">
+    <joint name="joint_1" value="0"/>
+    <joint name="joint_2" value="-1.5708"/>
+    <joint name="joint_3" value="1.5708"/>
+    <joint name="joint_4" value="0"/>
+    <joint name="joint_5" value="0"/>
+    <joint name="joint_6" value="0"/>
+  </group_state>
+
+  <!-- Arm: adjacent link pairs -->
+  <disable_collisions link1="base_link" link2="link_1" reason="Adjacent"/>
+  <disable_collisions link1="link_1"    link2="link_2" reason="Adjacent"/>
+  <disable_collisions link1="link_2"    link2="link_3" reason="Adjacent"/>
+  <disable_collisions link1="link_3"    link2="link_4" reason="Adjacent"/>
+  <disable_collisions link1="link_4"    link2="link_5" reason="Adjacent"/>
+  <disable_collisions link1="link_5"    link2="link_6" reason="Adjacent"/>
+
+  <!-- Arm: near-neighbours -->
+  <disable_collisions link1="base_link" link2="link_2" reason="Never"/>
+  <disable_collisions link1="link_1"    link2="link_3" reason="Never"/>
+  <disable_collisions link1="link_2"    link2="link_4" reason="Never"/>
+  <disable_collisions link1="link_3"    link2="link_5" reason="Never"/>
+  <disable_collisions link1="link_4"    link2="link_6" reason="Never"/>
+
+  <!-- Flange/tool0 fixed to link_6 -->
+  <disable_collisions link1="link_5" link2="flange"  reason="Never"/>
+  <disable_collisions link1="link_6" link2="flange"  reason="Adjacent"/>
+
+  <!-- Gripper fixed chain -->
+  <disable_collisions link1="link_6"               link2="gripper_gripper_base" reason="Adjacent"/>
+  <disable_collisions link1="tool0"                link2="gripper_gripper_base" reason="Adjacent"/>
+  <disable_collisions link1="gripper_gripper_base" link2="gripper_suction_cup"  reason="Adjacent"/>
+  <disable_collisions link1="gripper_suction_cup"  link2="gripper_tcp"          reason="Adjacent"/>
+  <disable_collisions link1="link_6"               link2="gripper_suction_cup"  reason="Never"/>
+  <disable_collisions link1="link_6"               link2="gripper_tcp"          reason="Never"/>
+  <disable_collisions link1="tool0"                link2="gripper_suction_cup"  reason="Never"/>
+  <disable_collisions link1="tool0"                link2="gripper_tcp"          reason="Never"/>
+  <disable_collisions link1="link_5"               link2="gripper_gripper_base" reason="Never"/>
+  <disable_collisions link1="link_5"               link2="gripper_suction_cup"  reason="Never"/>
+
+  <!-- THE KEY FIX: arm links that sweep over the tray during descent -->
+  <!-- link_4 is the long forearm — it passes over/near the tray on every pick -->
+  <disable_collisions link1="link_4" link2="instrument_tray" reason="Never"/>
+  <disable_collisions link1="link_5" link2="instrument_tray" reason="Never"/>
+  <disable_collisions link1="link_3" link2="instrument_tray" reason="Never"/>
+  <!-- Also disable against the instruments themselves for the approach -->
+  <disable_collisions link1="link_4" link2="scalpel"         reason="Never"/>
+  <disable_collisions link1="link_4" link2="forceps"         reason="Never"/>
+  <disable_collisions link1="link_4" link2="retractor"       reason="Never"/>
+  <disable_collisions link1="link_5" link2="scalpel"         reason="Never"/>
+  <disable_collisions link1="link_5" link2="forceps"         reason="Never"/>
+  <disable_collisions link1="link_5" link2="retractor"       reason="Never"/>
+
+</robot>

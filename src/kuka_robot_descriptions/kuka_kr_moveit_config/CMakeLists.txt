@@ -1,0 +1,54 @@
+cmake_minimum_required(VERSION 3.5)
+
+project(kuka_kr_moveit_config)
+
+find_package(ament_cmake REQUIRED)
+find_package(urdf REQUIRED)
+find_package(xacro REQUIRED)
+
+# TODO: add more robots to this list
+set(supported_robots
+  kr4_r600
+  kr6_r700_sixx
+  kr6_r700_2
+  kr6_r900_sixx
+  kr6_r900_sixx_with_gripper
+  kr6_r900_2
+  kr8_r1440_2_arc_hw
+  kr8_r2100_2_arc_hw
+  kr10_r900_2
+  kr10_r1100_2
+  kr12_r1450_3_hw
+  kr16_r1610_2
+  kr16_r2010_2
+  kr20_r1810_2
+  kr20_r3100
+  kr30_r2100
+  kr50_r2500
+  kr70_r2100
+  kr150_r3100_2
+  kr210_r2700_2
+  kr210_r3100_2
+  kr210_r3100_ultra
+  kr210_r3300_2_k
+  kr240_r2900_2
+  kr240_r3330
+  kr300_r2700_2
+  kr300_r2800_2_mt
+  kr360_r2830
+  kr500_r2800_2
+  kr560_r3100_2
+  kr600_r2830
+  kr800_r2800_2
+)
+
+foreach(model IN LISTS supported_robots)
+  xacro_add_files(TARGET ${model} srdf/kr_arm.srdf.xacro REMAP robot_name:=${model} OUTPUT ${model}.srdf INSTALL DESTINATION urdf)
+endforeach()
+install(FILES srdf/kr6_r900_sixx_with_gripper.srdf
+  DESTINATION share/${PROJECT_NAME}/urdf)
+install(DIRECTORY config srdf launch
+  DESTINATION share/${PROJECT_NAME})
+
+ament_package()
+

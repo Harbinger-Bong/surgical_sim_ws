@@ -1,0 +1,90 @@
+<?xml version="1.0"?>
+<!--
+  kr6_r900_sixx_with_gripper.urdf.xacro
+  ──────────────────────────────────────────────────────────────────
+  KR6 R900 sixx  +  vacuum gripper (fixed to tool0)
+
+  Supported modes:
+    mock     — kuka mock hardware interface (RViz / fake hardware)
+    hardware — real RSI driver
+    gazebo   — Gazebo Harmonic (gz_ros2_control) — NOT used here
+
+  SRDF planning chain tip: tool0
+  TCP (suction cup contact) is 76 mm beyond tool0 along +Z.
+
+  Usage (fake hardware, RViz):
+    ros2 launch kuka_kr_moveit_config moveit_planning_fake_hardware.launch.py \
+      robot_model:=kr6_r900_sixx_with_gripper robot_family:=agilus
+
+  ──────────────────────────────────────────────────────────────────
+  Bugs fixed vs the broken version:
+    1. Double ros2_control inclusion removed (was included here AND
+       inside the kuka_gazebo xacro that was always evaluated).
+    2. All required args added to kuka_agilus_ros2_control macro call.
+    3. gazebo xacro only included when mode == 'gazebo'.
+    4. kuka_agilus_ros2_control called exactly once with correct params.
+  ──────────────────────────────────────────────────────────────────
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="kr6_r900_sixx_with_gripper">
+
+  <!-- ── Args ─────────────────────────────────────────────────── -->
+  <xacro:arg name="prefix"              default=""/>
+  <xacro:arg name="mode"                default="mock"/>
+  <xacro:arg name="driver_version"      default="rsi_only"/>
+  <xacro:arg name="use_gpio"            default="false"/>
+  <xacro:arg name="roundtrip_time"      default="0"/>
+  <xacro:arg name="client_ip"           default="0.0.0.0"/>
+  <xacro:arg name="client_port"         default="59152"/>
+  <xacro:arg name="mxa_client_port"     default="1337"/>
+  <xacro:arg name="controller_ip"       default="0.0.0.0"/>
+  <xacro:arg name="verify_robot_model"  default="false"/>
+  <xacro:arg name="x"                   default="0"/>
+  <xacro:arg name="y"                   default="0"/>
+  <xacro:arg name="z"                   default="0"/>
+  <xacro:arg name="roll"                default="0"/>
+  <xacro:arg name="pitch"               default="0"/>
+  <xacro:arg name="yaw"                 default="0"/>
+
+  <!-- ── Macro includes ───────────────────────────────────────── -->
+  <xacro:include filename="$(find kuka_agilus_support)/urdf/kr6_r900_sixx_macro.xacro"/>
+  <xacro:include filename="$(find kuka_agilus_support)/urdf/kr_agilus_ros2_control_macro.xacro"/>
+  <xacro:include filename="$(find kuka_vacuum_gripper)/urdf/vacuum_gripper.urdf.xacro"/>
+
+  <!-- ── ros2_control (called exactly once) ───────────────────── -->
+  <xacro:kuka_agilus_ros2_control
+    name="$(arg prefix)kr6_r900_sixx_with_gripper"
+    driver_version="$(arg driver_version)"
+    client_ip="$(arg client_ip)"
+    client_port="$(arg client_port)"
+    mxa_client_port="$(arg mxa_client_port)"
+    controller_ip="$(arg controller_ip)"
+    prefix="$(arg prefix)"
+    mode="$(arg mode)"
+    use_gpio="$(arg use_gpio)"
+    roundtrip_time="$(arg roundtrip_time)"
+    verify_robot_model="$(arg verify_robot_model)">
+    <ext_axes_ros2_control_joints/>
+  </xacro:kuka_agilus_ros2_control>
+
+  <!-- ── World link ───────────────────────────────────────────── -->
+  <link name="world"/>
+
+  <!-- ── Robot links and joints (KR6 R900 sixx) ──────────────── -->
+  <xacro:kuka_kr6_r900_sixx_robot
+    prefix="$(arg prefix)"
+    package_name="kuka_agilus_support"/>
+
+  <!-- ── world → base_link ────────────────────────────────────── -->
+  <joint name="$(arg prefix)world-base_link" type="fixed">
+    <parent link="world"/>
+    <child  link="$(arg prefix)base_link"/>
+    <origin xyz="$(arg x) $(arg y) $(arg z)"
+            rpy="$(arg roll) $(arg pitch) $(arg yaw)"/>
+  </joint>
+
+  <!-- ── Vacuum gripper (fixed to tool0) ──────────────────────── -->
+  <xacro:vacuum_gripper
+    prefix="$(arg prefix)gripper_"
+    parent="$(arg prefix)tool0"/>
+
+</robot>

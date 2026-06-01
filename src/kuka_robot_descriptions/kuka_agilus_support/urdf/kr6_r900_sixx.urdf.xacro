@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="kr6_r900_sixx">
+
+  <xacro:arg name="prefix" default="" />
+  <xacro:arg name="mode" default="gazebo" />
+  <xacro:arg name="driver_version" default="rsi_only" />
+  <xacro:arg name="verify_robot_model" default="false" />
+
+  <xacro:property name="mode" value="$(arg mode)"/>
+
+  <xacro:include filename="$(find kuka_agilus_support)/urdf/kr6_r900_sixx_macro.xacro" />
+  
+  <xacro:include filename="$(find kuka_vacuum_gripper)/urdf/vacuum_gripper.urdf.xacro" />
+
+  <xacro:include filename="$(find kuka_agilus_support)/urdf/kr_agilus_ros2_control_macro.xacro" />
+
+
+  <link name="world" />
+
+  <xacro:kuka_kr6_r900_sixx_robot prefix="$(arg prefix)" package_name="kuka_agilus_support" />
+
+  <joint name="world_to_base" type="fixed">
+    <parent link="world" />
+    <child link="$(arg prefix)base_link" />
+  </joint>
+
+  <xacro:vacuum_gripper prefix="$(arg prefix)" parent="$(arg prefix)tool0" />
+
+  <xacro:kuka_agilus_ros2_control 
+    name="kr6_r900_sixx"
+    prefix="$(arg prefix)" 
+    mode="$(arg mode)" 
+    driver_version="$(arg driver_version)" 
+    client_ip="0.0.0.0"
+    client_port="59152"
+    mxa_client_port="59153"
+    controller_ip="127.0.0.1"
+    use_gpio="false"
+    roundtrip_time="4"
+    verify_robot_model="$(arg verify_robot_model)" />
+
+
+  <xacro:if value="${mode == 'gazebo'}">
+    <xacro:include filename="$(find kuka_gazebo)/gazebo/kuka_gazebo.xacro"/>
+    <xacro:kuka_gazebo
+        controller_config_package="kuka_resources"
+        controller_config_path="config/fake_hardware_config_6_axis.yaml" />
+  </xacro:if>
+
+</robot>

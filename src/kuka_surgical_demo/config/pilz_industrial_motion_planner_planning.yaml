@@ -1,0 +1,12 @@
+# Patched for MoveIt2 Jazzy — request_adapters must be a list (string_array),
+# NOT a block scalar string (>-). The original kuka file uses >- which loads
+# as a single string and crashes move_group with ParameterTypeException.
+planning_plugin: pilz_industrial_motion_planner/CommandPlanner
+
+request_adapters:
+  - default_planning_request_adapters/ResolveConstraintFrames
+  - default_planning_request_adapters/ValidateWorkspaceBounds
+  - default_planning_request_adapters/CheckStartStateBounds
+  - default_planning_request_adapters/CheckStartStateCollision
+
+start_state_max_bounds_error: 0.1
