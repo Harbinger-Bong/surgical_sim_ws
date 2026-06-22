@@ -1,165 +1,163 @@
 # Surgical Simulation Workspace
 
-ROS2 Jazzy surgical manipulation workspace built around a KUKA KR6 R900 sixx robot integrated with a custom vacuum gripper, MoveIt2 planning, and modular voice-command orchestration.
+ROS2 Jazzy surgical manipulation workspace built around a KUKA KR6 R900 sixx robot. The system integrates MoveIt2 planning, custom vacuum gripper manipulation, modular voice-command orchestration, computer vision, and direct hardware execution via the KUKA Ethernet KRL XML (EKI) interface.
 
-Current setup is focused on RViz-based simulation and workflow validation. Physical robot integration and real hardware execution are planned next.
+## Acknowledgements & Credits
+
+* This project is built on top of the Kroshu KUKA robot description repository[cite: 1].
+* KUKA EKI integration utilizes the `kuka_eki` package: [https://gitingest.com/tingelst/kuka_eki/blob/ros2/kuka_ek/](https://gitingest.com/tingelst/kuka_eki/blob/ros2/kuka_ek/)
 
 ---
 
-# System Overview
+## System Overview
 
 ```text
-Voice Command Interface
+Voice/Vision/Keyboard Interfaces
         ↓
-Speech Processing and Command Interpretation
+Command Interpretation & Target Generation
         ↓
-Vision and Task Understanding Layer
+MoveIt2 Motion Planning (Simulation/Validation)
         ↓
-Surgical Task Coordination System
+kuka_eki_bridge (Trajectory Interception)
         ↓
-Motion Planning and Safety Validation
-        ↓
-Simulated KUKA KR6 Robot with Vacuum Gripper Execution
+KUKA KRC4 Controller (Physical Hardware execution via EKI TCP/IP)
+
 ```
 
 ---
 
-# Workspace Structure
+## Workspace Structure
 
 ```text
-surgical_sim_ws/
+harbinger-bong-surgical_sim_ws/
+├── keyboard_control.py         # Direct EKI keyboard teleoperation
+├── keyboard_nudge.py           # Single-joint EKI micro-nudging
+├── palm_approach_node.py       # MediaPipe palm detection to EKI PTP
 ├── src/
-│   ├── kuka_robot_descriptions
-│   ├── kuka_surgical_demo
-│   ├── kuka_vacuum_gripper
-│   └── surgical_msgs
+│   ├── kuka_eki_bridge         # MoveIt-to-EKI trajectory dispatchers
+│   ├── kuka_robot_descriptions # KUKA URDFs and MoveIt configs
+│   ├── kuka_surgical_demo      # Surgical logic and Vosk voice pipelines
+│   ├── kuka_vacuum_gripper     # Vacuum gripper Xacro definitions
+│   └── surgical_msgs           # Custom ROS2 interfaces
+
 ```
 
 ---
 
-# Packages
+## Packages
 
-| Package                   | Purpose                                                 |
-| ------------------------- | ------------------------------------------------------- |
-| `surgical_msgs`           | Custom ROS2 service interfaces                          |
-| `kuka_vacuum_gripper`     | Vacuum gripper URDF/Xacro package                       |
-| `kuka_surgical_demo`      | Surgical orchestration, planning, and voice pipeline    |
-| `kuka_robot_descriptions` | Modified KR6 robot description and MoveIt configuration |
-
----
-
-# Features
-
-* MoveIt2 motion planning
-* Pilz PTP/LIN trajectories
-* Custom vacuum gripper integration
-* Single and multi-instrument workflows
-* Voice-command driven task execution
-* Offline speech recognition using Vosk
-* RViz fake hardware simulation
+| Package | Purpose |
+| --- | --- |
+| `kuka_eki_bridge` | EKI bridges translating MoveIt2 trajectories and vision logic to KRC4 hardware. |
+| `kuka_robot_descriptions` | Modified KR-series robot descriptions, meshes, and MoveIt2 configurations. |
+| `kuka_surgical_demo` | Surgical orchestration, mock pipelines, and voice control AI. |
+| `kuka_vacuum_gripper` | Vacuum gripper URDF/Xacro models. |
+| `surgical_msgs` | Custom ROS2 service interfaces (`TaskPickPlace.srv`). |
 
 ---
 
-# Build
+## Features
+
+* **MoveIt2 Motion Planning**: Integration with Pilz PTP/LIN trajectories and safety validation.
+* **Hardware EKI Bridge**: Real-time trajectory extraction from `/display_planned_path` directly to the KUKA state/motion servers.
+* **Vision-Driven Autonomy**:
+* OpenCV multi-color detection for automated suction triggering (`vision_gripper_bridge.py`).
+* MediaPipe hand landmark tracking for dynamic hover positioning (`palm_approach_node.py`).
+
+
+* **Voice Control**: Offline Vosk-powered speech recognition mapping spoken digits to 3D grid coordinates.
+* **Teleoperation**: Safe, absolute/relative keyboard control scripts mapped directly to EKI motion clients.
+
+---
+
+## Build Instructions
 
 Always source the workspace before running nodes:
 
 ```bash
 source install/setup.bash
+
 ```
 
-Build workspace:
+Build the workspace:
 
 ```bash
 cd ~/surgical_sim_ws
 colcon build
+
 ```
 
 ---
 
-# Launch Workflow
+## Launch Workflows
 
-## Base Visualization Launch
+### 1. Base RViz Simulation & MoveIt2
 
-Terminal 1:
+Required as the base layer for any MoveIt-based planning workflows.
+
+**Terminal 1:**
 
 ```bash
 ros2 launch kuka_kr_moveit_config moveit_planning_fake_hardware.launch.py \
 robot_model:=kr6_r900_sixx_with_gripper \
 robot_family:=agilus
+
 ```
 
-This launch is the base visualization and MoveIt2 setup required for all workflows.
+### 2. Hardware Execution (EKI Bridges)
 
----
+Ensure the KUKA robot is at `192.168.1.147` and the EKI server (`ros_eki.src`) is running on the SmartPad.
 
-# Single Pick-and-Place
-
-Terminal 2:
+**Standard MoveIt Bridge:**
 
 ```bash
-ros2 run kuka_surgical_demo surgical_pick_place
+ros2 run kuka_eki_bridge bridge_node
+
 ```
 
----
-
-# Multi-Instrument Pick-and-Place
-
-Terminal 2:
+**Keyboard-Toggled Gripper Bridge:**
 
 ```bash
-ros2 run kuka_surgical_demo multi_instrument_pick_place
+ros2 run kuka_eki_bridge gripper_bridge
+
 ```
 
----
-
-# Terminal Input Control + Mock Vision
-
-Terminal 1:
+**Vision-Automated Gripper Bridge (OpenCV):**
 
 ```bash
-ros2 launch kuka_kr_moveit_config moveit_planning_fake_hardware.launch.py \
-robot_model:=kr6_r900_sixx_with_gripper \
-robot_family:=agilus
+ros2 run kuka_eki_bridge vision_gripper_bridge
+
 ```
 
-Terminal 2:
+**Voice-Controlled Grid Bridge (Vosk):**
 
 ```bash
-ros2 run kuka_surgical_demo surgical_control_server
+ros2 run kuka_eki_bridge voice_bridge_node
+
 ```
 
-Terminal 3:
+### 3. Standalone Hardware Scripts (No MoveIt Required)
+
+These scripts communicate directly with the KUKA controller via the `kuka_eki` Python library.
+
+**Direct Keyboard Teleoperation:**
 
 ```bash
-ros2 run kuka_surgical_demo voice_terminal_mock
+python3 keyboard_control.py
+
 ```
 
-Terminal 4:
+**Single-Joint Keyboard Nudging:**
 
 ```bash
-ros2 run kuka_surgical_demo vision_logic_mock
+python3 keyboard_nudge.py
+
 ```
 
----
-
-# Voice Control
-
-Use the same launch sequence as the terminal input control workflow, but replace the terminal input node with:
+**MediaPipe Palm Detection & Approach:**
 
 ```bash
-ros2 run kuka_surgical_demo voice_ai_node
+# Append --dry-run to test detection without robot motion
+python3 palm_approach_node.py
+
 ```
-
----
-
-# Acknowledgements
-
-This project is built on top of the Kroshu KUKA robot description repository:
-
-https://github.com/kroshu/kuka_robot_descriptions
-
-# Notes
-
-* Large AI models and binary artifacts are excluded from Git tracking.
-* Mesh assets are retained for URDF and MoveIt visualization support.
