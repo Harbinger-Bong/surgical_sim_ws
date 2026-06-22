@@ -45,6 +45,10 @@ setup(
             'vision_logic_mock = kuka_surgical_demo.vision_logic_mock:main',
             'voice_terminal_mock = kuka_surgical_demo.voice_terminal_mock:main',
             'voice_ai_node = kuka_surgical_demo.voice_ai_node:main',
+            'voice_grid_controller = kuka_surgical_demo.voice_grid_controller:main',
+            'voice_bridge_node = kuka_surgical_demo.voice_bridge:main',
+            'bridge_node = kuka_surgical_demo.bridge_node:main',
+            'palm_approach_node = kuka_surgical_demo.palm_approach_node:main',
         ],
     },
 )
