@@ -1,29 +1,48 @@
 #!/usr/bin/env python3
 """
-Surgical Control Server
+surgical_control_server.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Exposes  /execute_task  (TaskPickPlace.srv).
+Exposes /execute_task (TaskPickPlace.srv).
 
-Orientation strategy
-  Original orientation qy=0.707 (90° about Y) points tool0 straight
-  down, but leaves joint_4 (forearm) extending horizontally forward
-  into the instrument tray during the LIN descent — causing collision.
+Calibration basis (2026-06-23, SmartPad ground truth)
+──────────────────────────────────────────────────────
+  Suction tip on green mat (Tool 111 [1], Base $NULLFRAME [0]):
+    TCP  X = 373.92 mm   Y = 84.51 mm   Z = -183.18 mm
+    Euler A = -180.00°   B = 50.33°     C = 180.00°
 
-  Fix: add a 90° roll about the tool Z-axis by composing with qz=0.5.
-  The combined quaternion (0.5, 0.5, 0.5, 0.5) still points the tool
-  straight down in world frame, but rolls joint_4 by 90° so the
-  forearm extends sideways (world Y direction) instead of forward into
-  the tray.  The tray is narrow in Y so the forearm clears it.
+  Derived quaternion (ZYX Euler → quat):
+    qx=0.0  qy=-0.9051  qz=0.0  qw=-0.4252
 
-  Pick orientation  = (qx=0.5, qy=0.5, qz=0.5, qw=0.5)   roll +90°
-  Place orientation = same (consistent elbow posture throughout)
-  Park  orientation = same
+Z reference values (tool0, base_link frame)
+────────────────────────────────────────────
+  TIP_OFFSET   = 30 mm below tool0
+  Z_TABLE      = -183.18 mm  (tip on mat = tool0 Z)
+  pick_z(H)    = Z_TABLE + H  (tip offset cancels in derivation)
+  approach_z   = pick_z + 120 mm
+  Z_SAFE       = +100 mm
+
+Tray geometry (from CAD sketch, base_link frame)
+─────────────────────────────────────────────────
+  Robot base centre = origin.
+  Tray near edge at X=340mm, far at X=640mm → centre X=490mm
+  Tray left edge at Y=-225mm, right at Y=+225mm → centre Y=0mm
+  Tray is centred on the robot Y axis (from sketch geometry).
+  Physical contact at (373.92, 84.51) was a specific jogged point,
+  not the tray centre.
+
+Collision fix
+─────────────
+  The picked instrument is REMOVED from the world scene before being
+  attached to tool0. This prevents MoveIt from detecting a collision
+  between the attached instrument and the world-object version of itself
+  or its neighbours during transit.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import rclpy
 import threading
 import time
+import socket
 
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -41,19 +60,58 @@ from moveit_msgs.srv import ApplyPlanningScene
 from moveit_msgs.action import MoveGroup
 from surgical_msgs.srv import TaskPickPlace
 
-FRAME           = 'base_link'
-TIP             = 'tool0'
+# ── Frames ────────────────────────────────────────────────────────────────────
+FRAME = 'base_link'
+TIP   = 'tool0'
 
-# Tool pointing straight down + forearm rolled 90° sideways
-# Quaternion: Y90 * Z90 = (w=0.5, x=0.5, y=0.5, z=0.5)
-# This keeps the suction cup pointing at -Z (world down) while
-# rotating joint_4 so link_4/5 swing out in the ±Y direction,
-# away from the instrument tray which is narrow in Y (160mm).
-ORI = dict(qx=0.0, qy=0.7071068, qz=0.0, qw=0.7071068)
+# ── Orientation (SmartPad ground truth: A=-180°, B=50.33°, C=180°) ────────────
+ORI = dict(qx=0.0, qy=-0.9051, qz=0.0, qw=-0.4252)
 
-PICK_CLEARANCE  = 0.12
-PLACE_CLEARANCE = 0.12
+# ── Z reference values (metres, tool0, base_link frame) ──────────────────────
+Z_TABLE    = -0.18318   # tool0 Z with suction tip on mat
+TIP_OFFSET =  0.030     # suction tip 30mm below tool0
+INST_H     =  0.010     # instrument height off tray (~10mm lying flat)
+APPROACH_CLEARANCE = 0.120
+Z_SAFE     =  0.100     # transit height
+
+def pick_z(obj_h: float) -> float:
+    """tool0 Z to contact object of height obj_h on mat. TIP_OFFSET cancels."""
+    return Z_TABLE + obj_h
+
+def approach_z(obj_h: float) -> float:
+    return pick_z(obj_h) + APPROACH_CLEARANCE
+
+# ── Workspace bounds (metres, base_link) ──────────────────────────────────────
+WS_X_MIN, WS_X_MAX =  0.150,  0.700
+WS_Y_MIN, WS_Y_MAX = -0.250,  0.250
+WS_Z_MIN, WS_Z_MAX = -0.200,  0.600
+
+# ── Tray geometry (metres, from CAD sketch) ───────────────────────────────────
+TRAY_CENTRE_X =  0.490   # (340+640)/2 = 490mm
+TRAY_CENTRE_Y =  0.000   # centred on robot Y axis per sketch
+TRAY_Z        = -0.2132  # mat surface = Z_TABLE - TIP_OFFSET
+
+# ── Park position ─────────────────────────────────────────────────────────────
 PARK_X, PARK_Y, PARK_Z = 0.40, 0.00, 0.40
+
+# ── Velocity scaling (fraction of max) ───────────────────────────────────────
+VEL_TRANSIT = 0.05   # long-range PTP transits (safe height, park)
+VEL_NEAR    = 0.03   # approach, contact, retract — anything near the tray
+
+# ── EKI ───────────────────────────────────────────────────────────────────────
+KUKA_IP  = "192.168.1.147"
+EKI_PORT = 54600
+
+
+def build_gripper_packet(state: int) -> bytes:
+    return (
+        b'<RobotCommand><Type>0</Type>'
+        b'<Axis A1="0" A2="0" A3="0" A4="0" A5="0" A6="0"/>'
+        b'<Cart X="0" Y="0" Z="0" A="0" B="0" C="0"/>'
+        b'<Velocity>0.1</Velocity>'
+        b'<Gripper>' + str(state).encode() + b'</Gripper>'
+        b'</RobotCommand>'
+    )
 
 
 def _ros_sleep(node, seconds):
@@ -67,6 +125,7 @@ class SurgicalControlServer(Node):
     def __init__(self):
         super().__init__('surgical_control_server')
         self.cb = ReentrantCallbackGroup()
+
         self._move_client = ActionClient(
             self, MoveGroup, '/move_action', callback_group=self.cb)
         self._scene_client = self.create_client(
@@ -74,13 +133,54 @@ class SurgicalControlServer(Node):
         self.create_service(
             TaskPickPlace, '/execute_task',
             self.execute_task_callback, callback_group=self.cb)
+
         self._task_lock = threading.Lock()
+
+        # EKI gripper socket
+        self._gripper_sock: socket.socket | None = None
+        self._gripper_lock = threading.Lock()
+        self._connect_gripper()
 
         self.get_logger().info('Waiting for MoveGroup action server...')
         self._move_client.wait_for_server()
         self.get_logger().info('Waiting for ApplyPlanningScene service...')
         self._scene_client.wait_for_service()
-        self.get_logger().info('Surgical Control Server online — awaiting tasks.')
+        self.get_logger().info('Surgical Control Server online.')
+
+    # ── EKI gripper ───────────────────────────────────────────────────────────
+
+    def _connect_gripper(self):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5.0)
+            sock.connect((KUKA_IP, EKI_PORT))
+            sock.settimeout(None)
+            self._gripper_sock = sock
+            self.get_logger().info(f'Gripper socket connected to {KUKA_IP}:{EKI_PORT}')
+        except OSError as e:
+            self._gripper_sock = None
+            self.get_logger().warn(
+                f'Gripper socket failed ({e}). Vacuum will not fire.')
+
+    def _send_gripper(self, state: int):
+        if self._gripper_sock is None:
+            return
+        with self._gripper_lock:
+            try:
+                self._gripper_sock.sendall(build_gripper_packet(state))
+                self.get_logger().info(
+                    f'  [VACUUM {"ON" if state else "OFF"}]')
+            except OSError as e:
+                self.get_logger().error(f'Gripper send failed: {e}')
+
+    # ── Bounds check ──────────────────────────────────────────────────────────
+
+    def _in_bounds(self, x, y, z) -> bool:
+        return (WS_X_MIN <= x <= WS_X_MAX and
+                WS_Y_MIN <= y <= WS_Y_MAX and
+                WS_Z_MIN <= z <= WS_Z_MAX)
+
+    # ── Service callback ──────────────────────────────────────────────────────
 
     async def execute_task_callback(self, request, response):
         obj = request.object_id
@@ -98,47 +198,77 @@ class SurgicalControlServer(Node):
     async def _run_task(self, request, response):
         obj = request.object_id
         self.get_logger().info(f'=== Task: {obj.upper()} ===')
-        px, py, pz = (request.pick_pose.position.x,
-                      request.pick_pose.position.y,
-                      request.pick_pose.position.z)
-        dx, dy, dz = (request.place_pose.position.x,
-                      request.place_pose.position.y,
-                      request.place_pose.position.z)
-        pick_app  = pz + PICK_CLEARANCE
-        place_app = dz + PLACE_CLEARANCE
+
+        px = request.pick_pose.position.x
+        py = request.pick_pose.position.y
+        pz = request.pick_pose.position.z
+        dx = request.place_pose.position.x
+        dy = request.place_pose.position.y
+        dz = request.place_pose.position.z
+
+        for label, x, y, z in [('pick', px, py, pz), ('place', dx, dy, dz)]:
+            if not self._in_bounds(x, y, z):
+                return self._fail(response,
+                    f'{label} pose ({x:.3f},{y:.3f},{z:.3f}) outside workspace')
+
+        pick_app  = pz + APPROACH_CLEARANCE
+        place_app = dz + APPROACH_CLEARANCE
+
+        # ── Pick sequence ────────────────────────────────────────────────────
+        self.get_logger().info('  Pick → safe height (PTP)')
+        if not await self.move_to(px, py, Z_SAFE, 'PTP', VEL_TRANSIT):
+            return self._fail(response, 'Transit to pick column failed')
 
         self.get_logger().info('  Pick → approach (PTP)')
-        if not await self.move_to(px, py, pick_app, 'PTP'):
+        if not await self.move_to(px, py, pick_app, 'PTP', VEL_NEAR):
             return self._fail(response, 'Pick approach failed')
 
         self.get_logger().info('  Pick → contact (LIN)')
-        if not await self.move_to(px, py, pz, 'LIN'):
+        if not await self.move_to(px, py, pz, 'LIN', VEL_NEAR):
             return self._fail(response, 'Pick contact failed')
 
+        # Remove world object BEFORE attaching — prevents collision check
+        # between the attached instrument and its own world-object copy
+        await self.remove_object(obj)
+        self._send_gripper(1)
         await self.attach_object(obj)
-        _ros_sleep(self, 0.4)
+        _ros_sleep(self, 0.5)
 
         self.get_logger().info('  Pick → retract (LIN)')
-        if not await self.move_to(px, py, pick_app, 'LIN'):
+        if not await self.move_to(px, py, pick_app, 'LIN', VEL_NEAR):
             return self._fail(response, 'Pick retract failed')
 
+        # ── Transit ──────────────────────────────────────────────────────────
+        self.get_logger().info('  Transit → safe height (PTP)')
+        if not await self.move_to(px, py, Z_SAFE, 'PTP', VEL_TRANSIT):
+            return self._fail(response, 'Transit lift failed')
+
         self.get_logger().info('  Place → transit (PTP)')
-        if not await self.move_to(dx, dy, place_app, 'PTP'):
-            return self._fail(response, 'Transit failed')
+        if not await self.move_to(dx, dy, Z_SAFE, 'PTP', VEL_TRANSIT):
+            return self._fail(response, 'Transit to place column failed')
+
+        # ── Place sequence ───────────────────────────────────────────────────
+        self.get_logger().info('  Place → approach (PTP)')
+        if not await self.move_to(dx, dy, place_app, 'PTP', VEL_NEAR):
+            return self._fail(response, 'Place approach failed')
 
         self.get_logger().info('  Place → contact (LIN)')
-        if not await self.move_to(dx, dy, dz, 'LIN'):
+        if not await self.move_to(dx, dy, dz, 'LIN', VEL_NEAR):
             return self._fail(response, 'Place contact failed')
 
+        self._send_gripper(0)
         await self.detach_object(obj)
         _ros_sleep(self, 0.4)
 
         self.get_logger().info('  Place → retract (LIN)')
-        if not await self.move_to(dx, dy, place_app, 'LIN'):
+        if not await self.move_to(dx, dy, place_app, 'LIN', VEL_NEAR):
             return self._fail(response, 'Place retract failed')
 
+        # ── Park ─────────────────────────────────────────────────────────────
+        self.get_logger().info('  Return → safe height (PTP)')
+        await self.move_to(dx, dy, Z_SAFE, 'PTP', VEL_TRANSIT)
         self.get_logger().info('  Parking (PTP)')
-        await self.move_to(PARK_X, PARK_Y, PARK_Z, 'PTP')
+        await self.move_to(PARK_X, PARK_Y, PARK_Z, 'PTP', VEL_TRANSIT)
 
         self.get_logger().info(f'=== Complete: {obj.upper()} ===')
         response.success = True
@@ -147,9 +277,12 @@ class SurgicalControlServer(Node):
 
     def _fail(self, response, msg):
         self.get_logger().error(f'  ABORTED: {msg}')
+        self._send_gripper(0)
         response.success = False
         response.message = msg
         return response
+
+    # ── Planning scene ────────────────────────────────────────────────────────
 
     def _apply_scene_sync(self, scene):
         req = ApplyPlanningScene.Request()
@@ -157,16 +290,16 @@ class SurgicalControlServer(Node):
         future = self._scene_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)
 
-    def add_box(self, name, xyz, size):
+    def add_box(self, name, xyz_m, size_m):
         p = Pose()
-        p.position.x, p.position.y, p.position.z = xyz
+        p.position.x, p.position.y, p.position.z = xyz_m
         p.orientation.w = 1.0
         co = CollisionObject()
         co.header.frame_id = FRAME
         co.id = name
         box = SolidPrimitive()
         box.type = SolidPrimitive.BOX
-        box.dimensions = list(size)
+        box.dimensions = list(size_m)
         co.primitives = [box]
         co.primitive_poses = [p]
         co.operation = CollisionObject.ADD
@@ -176,17 +309,19 @@ class SurgicalControlServer(Node):
         self._apply_scene_sync(scene)
         self.get_logger().info(f'  Scene: added "{name}"')
 
-    def setup_surgical_scene(self):
-        self.get_logger().info('=== Building surgical scene ===')
-        self.add_box('instrument_tray', (0.55, 0.0, 0.0), (0.20, 0.16, 0.005))
-        inst_size = (0.04, 0.02, 0.010)
-        for name, y_off in [
-            ('scalpel',   -0.05),
-            ('forceps',    0.00),
-            ('retractor',  0.05),
-        ]:
-            self.add_box(name, (0.55, y_off, 0.010), inst_size)
-        self.get_logger().info('=== Scene ready ===')
+    async def remove_object(self, object_id):
+        """Remove object from world scene before picking it up."""
+        co = CollisionObject()
+        co.header.frame_id = FRAME
+        co.id = object_id
+        co.operation = CollisionObject.REMOVE
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.world.collision_objects = [co]
+        req = ApplyPlanningScene.Request()
+        req.scene = scene
+        await self._scene_client.call_async(req)
+        self.get_logger().info(f'  Scene: removed world object "{object_id}"')
 
     async def attach_object(self, object_id):
         aco = AttachedCollisionObject()
@@ -204,7 +339,7 @@ class SurgicalControlServer(Node):
         req = ApplyPlanningScene.Request()
         req.scene = scene
         await self._scene_client.call_async(req)
-        self.get_logger().info(f'  [VACUUM ON]  {object_id}')
+        self.get_logger().info(f'  Scene: "{object_id}" attached to {TIP}')
 
     async def detach_object(self, object_id):
         aco = AttachedCollisionObject()
@@ -217,11 +352,44 @@ class SurgicalControlServer(Node):
         req = ApplyPlanningScene.Request()
         req.scene = scene
         await self._scene_client.call_async(req)
-        self.get_logger().info(f'  [VACUUM OFF] {object_id}')
+        self.get_logger().info(f'  Scene: "{object_id}" detached')
 
-    async def move_to(self, x, y, z, planner='PTP', vel=0.15):
+    def setup_surgical_scene(self):
+        self.get_logger().info('=== Building surgical scene ===')
+
+        # Table surface — prevents planning through the table
+        # 50mm thick slab sitting below mat surface
+        self.add_box('table_surface',
+                     (TRAY_CENTRE_X, TRAY_CENTRE_Y, TRAY_Z - 0.025),
+                     (1.0, 1.0, 0.050))
+
+        # Instrument tray — 450mm × 300mm mat, centred at (490, 0)
+        self.add_box('instrument_tray',
+                     (TRAY_CENTRE_X, TRAY_CENTRE_Y, TRAY_Z),
+                     (0.450, 0.300, 0.005))
+
+        # Instruments — 60mm apart in Y, centred on tray
+        # 150mm long × 20mm wide × 10mm tall (lying flat)
+        inst_size = (0.150, 0.020, 0.010)
+        for name, y_offset in [
+            ('scalpel',   -0.060),
+            ('forceps',    0.000),
+            ('retractor', +0.060),
+        ]:
+            self.add_box(name,
+                         (TRAY_CENTRE_X, TRAY_CENTRE_Y + y_offset,
+                          TRAY_Z + 0.010),
+                         inst_size)
+
+        self.get_logger().info('=== Scene ready ===')
+
+    # ── Motion ────────────────────────────────────────────────────────────────
+
+    async def move_to(self, x, y, z, planner='PTP', vel=VEL_NEAR):
         target = Pose()
-        target.position.x, target.position.y, target.position.z = x, y, z
+        target.position.x = x
+        target.position.y = y
+        target.position.z = z
         target.orientation.x = ORI['qx']
         target.orientation.y = ORI['qy']
         target.orientation.z = ORI['qz']
@@ -267,10 +435,10 @@ class SurgicalControlServer(Node):
         goal.planning_options.plan_only = False
         goal.planning_options.replan = False
 
-        self.get_logger().info(f'  [{planner}] → ({x:.3f}, {y:.3f}, {z:.3f})')
+        self.get_logger().info(f'  [{planner}] → ({x:.4f}, {y:.4f}, {z:.4f}) m')
         goal_handle = await self._move_client.send_goal_async(goal)
         if not goal_handle.accepted:
-            self.get_logger().error('  Goal REJECTED')
+            self.get_logger().error('  Goal REJECTED by MoveGroup')
             return False
         result_resp = await goal_handle.get_result_async()
         code = result_resp.result.error_code.val
@@ -279,6 +447,12 @@ class SurgicalControlServer(Node):
             return True
         self.get_logger().error(f'  ✗ FAILED (error_code={code})')
         return False
+
+    def destroy_node(self):
+        self._send_gripper(0)
+        if self._gripper_sock:
+            self._gripper_sock.close()
+        super().destroy_node()
 
 
 def main(args=None):
