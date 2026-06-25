@@ -13,49 +13,34 @@ Gripper architecture
   robot motion commands. This avoids the EKI single-client-per-
   channel constraint that would otherwise block motion commands.
 
-Calibration basis (2026-06-25, SmartPad ground truth — with gripper)
-─────────────────────────────────────────────────────────────────────
-  Suction tip on green mat corners (Tool 111 [1], Base $NULLFRAME [0]):
-    Centre:        X=415.68  Y=-1.80   Z=53.50  A=174.00  B=44.72  C=175.09
-    Top-right:     X=546.66  Y=-212.09 Z=55.36  A=173.95  B=44.72  C=175.03
-    Bottom-right:  X=285.90  Y=-212.09 Z=53.71  A=173.95  B=44.72  C=175.03
-    Bottom-left:   X=285.90  Y=208.45  Z=57.01  A=173.95  B=44.72  C=175.03
-    Top-left:      X=544.88  Y=208.73  Z=54.28  A=174.01  B=44.69  C=175.07
+Calibration basis (2026-06-23, SmartPad ground truth)
+──────────────────────────────────────────────────────
+  Suction tip on green mat (Tool 111 [1], Base $NULLFRAME [0]):
+    TCP  X = 373.92 mm   Y = 84.51 mm   Z = -183.18 mm
+    Euler A = -180.00°   B = 50.33°     C = 180.00°
 
-  Corrected centre (without gripper):
-    X=440.60  Y=-0.97  Z=2.95  A=-180.00  B=0.00  C=180.00
+  Derived quaternion (ZYX Euler → quat):
+    qx=0.0  qy=-0.9051  qz=0.0  qw=-0.4252
 
-  Derived orientation quaternion (ZYX: A=174°, B=44.72°, C=175.09°):
-    qx=0.0321  qy=0.9235  qz=0.0197  qw=0.3816
+Z reference values (tool0, base_link frame)
+────────────────────────────────────────────
+  TIP_OFFSET   = 30 mm below tool0
+  Z_TABLE      = -183.18 mm  (tip on mat = tool0 Z)
+  pick_z(H)    = Z_TABLE + H  (tip offset cancels in derivation)
+  approach_z   = pick_z + 120 mm
+  Z_SAFE       = +100 mm
 
-Z reference values (tool0, base_link frame, with gripper mounted)
-──────────────────────────────────────────────────────────────────
-  Z_TABLE      = +53.50 mm  (tip on mat = tool0 Z in working pose)
-  INST_H       = +10 mm     (object height off mat surface)
-  pick_z(H)    = Z_TABLE + H
-  APPROACH_CLEARANCE = 120 mm
-  Z_SAFE       = +250 mm    (must be above approach height of ~174mm)
+Tray geometry (from CAD sketch, base_link frame)
+─────────────────────────────────────────────────
+  Tray near edge X=340mm, far X=640mm → centre X=490mm
+  Tray centred on robot Y axis → centre Y=0mm
+  Instruments spaced 60mm apart in Y.
 
-  NOTE: Z_TABLE is POSITIVE in this pose (B≈44.72° forward tilt).
-  The previous value (-183.18mm) was measured in a different pose
-  (B=50.33°) and caused the 45mm gap observed during real-world runs.
-
-Tray geometry (from physical corner measurements, base_link frame)
-──────────────────────────────────────────────────────────────────
-  X range: 285.9 → 546.7 mm  → centre X = 416.3 mm
-  Y range: -212.1 → 208.7 mm → centre Y = -1.7 mm (≈ 0)
-  Instruments spaced 60mm apart in Y, centred on tray.
-
-Workspace bounds updated to match measured mat extents.
-
-Motion sequence (simplified — 6 steps down from 9)
-────────────────────────────────────────────────────
-  1. PTP to pick XY at transit_z
-  2. LIN down to pick contact
-  3. PTP (retract + arc) to place XY at transit_z
-  4. LIN down to place contact
-  5. LIN retract up to place_app
-  6. PTP to park
+Collision fix
+─────────────
+  Picked instrument is REMOVED from world scene before attach.
+  Prevents ValidateSolution collision between attached instrument
+  and remaining world objects during transit.
 
 Velocity
 ────────
@@ -91,31 +76,31 @@ TIP   = 'tool0'
 
 GRIPPER_CMD_TOPIC = '/gripper_cmd'   # Int8: 1 = ON, 0 = OFF
 
-# ── Orientation (2026-06-25 ground truth: A=174°, B=44.72°, C=175.09°) ────────
-ORI = dict(qx=0.0321, qy=0.9235, qz=0.0197, qw=0.3816)
+# ── Orientation (SmartPad ground truth: A=-180°, B=50.33°, C=180°) ────────────
+ORI = dict(qx=0.0, qy=-0.9051, qz=0.0, qw=-0.4252)
 
-# ── Z reference values (metres, tool0, base_link frame, gripper mounted) ──────
-Z_TABLE            =  0.05350   # tip on mat in working pose (measured)
-INST_H             =  0.010     # object height off mat (~10mm lying flat)
-APPROACH_CLEARANCE =  0.120     # 120mm clearance above contact point
-Z_SAFE             =  0.250     # transit height — above approach (~174mm)
+# ── Z reference values (metres, tool0, base_link frame) ──────────────────────
+Z_TABLE    = -0.2
+TIP_OFFSET =  0.030
+INST_H     =  0.010
+APPROACH_CLEARANCE = 0.120
+Z_SAFE     =  0.100
 
 def pick_z(obj_h: float) -> float:
-    """tool0 Z to contact object of height obj_h sitting on mat."""
     return Z_TABLE + obj_h
 
 def approach_z(obj_h: float) -> float:
     return pick_z(obj_h) + APPROACH_CLEARANCE
 
-# ── Workspace bounds (metres, base_link) — updated from physical measurements ─
-WS_X_MIN, WS_X_MAX =  0.250,  0.600
-WS_Y_MIN, WS_Y_MAX = -0.860, 0.250
-WS_Z_MIN, WS_Z_MAX =  0.030,  0.600
+# ── Workspace bounds (metres, base_link) ──────────────────────────────────────
+WS_X_MIN, WS_X_MAX =  0.150,  0.700
+WS_Y_MIN, WS_Y_MAX = -0.250,  0.250
+WS_Z_MIN, WS_Z_MAX = -0.200,  0.600
 
-# ── Tray geometry (metres, from physical corner measurements 2026-06-25) ──────
-TRAY_CENTRE_X =  0.4163   # (285.9 + 546.7) / 2
-TRAY_CENTRE_Y = -0.0017   # (-212.1 + 208.7) / 2  ≈ 0
-TRAY_Z        =  0.0535   # mat surface Z with gripper (= Z_TABLE)
+# ── Tray geometry (metres) ────────────────────────────────────────────────────
+TRAY_CENTRE_X =  0.490
+TRAY_CENTRE_Y =  0.000
+TRAY_Z        = -0.2132
 
 # ── Park position ─────────────────────────────────────────────────────────────
 PARK_X, PARK_Y, PARK_Z = 0.40, 0.00, 0.40
@@ -137,16 +122,23 @@ class SurgicalControlServer(Node):
         super().__init__('surgical_control_server')
         self.cb = ReentrantCallbackGroup()
 
+        # MoveIt action client
         self._move_client = ActionClient(
             self, MoveGroup, '/move_action', callback_group=self.cb)
+
+        # Planning scene client
         self._scene_client = self.create_client(
             ApplyPlanningScene, '/apply_planning_scene')
+
+        # Task service
         self.create_service(
             TaskPickPlace, '/execute_task',
             self.execute_task_callback, callback_group=self.cb)
 
         self._task_lock = threading.Lock()
 
+        # Gripper command publisher — gripper_bridge owns the socket,
+        # we just tell it what state we need
         self._gripper_pub = self.create_publisher(Int8, GRIPPER_CMD_TOPIC, 10)
         self.get_logger().info(f'Publishing gripper commands on {GRIPPER_CMD_TOPIC}')
 
@@ -156,9 +148,10 @@ class SurgicalControlServer(Node):
         self._scene_client.wait_for_service()
         self.get_logger().info('Surgical Control Server online.')
 
-    # ── Gripper ───────────────────────────────────────────────────────────────
+    # ── Gripper command ───────────────────────────────────────────────────────
 
     def _send_gripper(self, state: int):
+        """Publish gripper state — gripper_bridge.py executes the EKI packet."""
         msg = Int8()
         msg.data = state
         self._gripper_pub.publish(msg)
@@ -205,15 +198,17 @@ class SurgicalControlServer(Node):
 
         pick_app  = pz + APPROACH_CLEARANCE
         place_app = dz + APPROACH_CLEARANCE
-        transit_z = max(pick_app, place_app, Z_SAFE)
 
-        # ── 1. Transit to above pick ──────────────────────────────────────────
-        self.get_logger().info('  [1/6] Transit → above pick (PTP)')
-        if not await self.move_to(px, py, transit_z, 'PTP', VEL_TRANSIT):
+        # ── Pick sequence ────────────────────────────────────────────────────
+        self.get_logger().info('  Pick → safe height (PTP)')
+        if not await self.move_to(px, py, Z_SAFE, 'PTP', VEL_TRANSIT):
             return self._fail(response, 'Transit to pick column failed')
 
-        # ── 2. LIN down to pick contact ───────────────────────────────────────
-        self.get_logger().info('  [2/6] Pick → contact (LIN)')
+        self.get_logger().info('  Pick → approach (PTP)')
+        if not await self.move_to(px, py, pick_app, 'PTP', VEL_NEAR):
+            return self._fail(response, 'Pick approach failed')
+
+        self.get_logger().info('  Pick → contact (LIN)')
         if not await self.move_to(px, py, pz, 'LIN', VEL_NEAR):
             return self._fail(response, 'Pick contact failed')
 
@@ -222,13 +217,25 @@ class SurgicalControlServer(Node):
         await self.attach_object(obj)
         _ros_sleep(self, 0.5)
 
-        # ── 3. PTP arc to above place — retract + transit in one move ─────────
-        self.get_logger().info('  [3/6] Retract + transit → above place (PTP)')
-        if not await self.move_to(dx, dy, transit_z, 'PTP', VEL_TRANSIT):
+        self.get_logger().info('  Pick → retract (LIN)')
+        if not await self.move_to(px, py, pick_app, 'LIN', VEL_NEAR):
+            return self._fail(response, 'Pick retract failed')
+
+        # ── Transit ──────────────────────────────────────────────────────────
+        self.get_logger().info('  Transit → safe height (PTP)')
+        if not await self.move_to(px, py, Z_SAFE, 'PTP', VEL_TRANSIT):
+            return self._fail(response, 'Transit lift failed')
+
+        self.get_logger().info('  Place → transit (PTP)')
+        if not await self.move_to(dx, dy, Z_SAFE, 'PTP', VEL_TRANSIT):
             return self._fail(response, 'Transit to place column failed')
 
-        # ── 4. LIN down to place contact ──────────────────────────────────────
-        self.get_logger().info('  [4/6] Place → contact (LIN)')
+        # ── Place sequence ───────────────────────────────────────────────────
+        self.get_logger().info('  Place → approach (PTP)')
+        if not await self.move_to(dx, dy, place_app, 'PTP', VEL_NEAR):
+            return self._fail(response, 'Place approach failed')
+
+        self.get_logger().info('  Place → contact (LIN)')
         if not await self.move_to(dx, dy, dz, 'LIN', VEL_NEAR):
             return self._fail(response, 'Place contact failed')
 
@@ -236,13 +243,14 @@ class SurgicalControlServer(Node):
         await self.detach_object(obj)
         _ros_sleep(self, 0.4)
 
-        # ── 5. LIN retract ────────────────────────────────────────────────────
-        self.get_logger().info('  [5/6] Place → retract (LIN)')
+        self.get_logger().info('  Place → retract (LIN)')
         if not await self.move_to(dx, dy, place_app, 'LIN', VEL_NEAR):
             return self._fail(response, 'Place retract failed')
 
-        # ── 6. Park ───────────────────────────────────────────────────────────
-        self.get_logger().info('  [6/6] Parking (PTP)')
+        # ── Park ─────────────────────────────────────────────────────────────
+        self.get_logger().info('  Return → safe height (PTP)')
+        await self.move_to(dx, dy, Z_SAFE, 'PTP', VEL_TRANSIT)
+        self.get_logger().info('  Parking (PTP)')
         await self.move_to(PARK_X, PARK_Y, PARK_Z, 'PTP', VEL_TRANSIT)
 
         self.get_logger().info(f'=== Complete: {obj.upper()} ===')
@@ -252,7 +260,7 @@ class SurgicalControlServer(Node):
 
     def _fail(self, response, msg):
         self.get_logger().error(f'  ABORTED: {msg}')
-        self._send_gripper(0)
+        self._send_gripper(0)   # safety: always release vacuum on failure
         response.success = False
         response.message = msg
         return response
@@ -305,8 +313,6 @@ class SurgicalControlServer(Node):
         aco.touch_links = [
             'tool0', 'gripper_gripper_base',
             'gripper_suction_cup', 'gripper_tcp',
-            'scalpel', 'forceps', 'retractor',
-            'instrument_tray'
         ]
         scene = PlanningScene()
         scene.is_diff = True
@@ -333,17 +339,17 @@ class SurgicalControlServer(Node):
     def setup_surgical_scene(self):
         self.get_logger().info('=== Building surgical scene ===')
 
-        # Table surface slab — 25mm below mat surface
+        # Table surface slab
         self.add_box('table_surface',
                      (TRAY_CENTRE_X, TRAY_CENTRE_Y, TRAY_Z - 0.025),
                      (1.0, 1.0, 0.050))
 
-        # Instrument tray surface
+        # Instrument tray
         self.add_box('instrument_tray',
                      (TRAY_CENTRE_X, TRAY_CENTRE_Y, TRAY_Z),
-                     (0.300, 0.450, 0.005))
+                     (0.450, 0.300, 0.005))
 
-        # Instruments — 60mm apart in Y, centred on tray
+        # Instruments — 60mm apart in Y
         inst_size = (0.150, 0.020, 0.010)
         for name, y_offset in [
             ('scalpel',   -0.060),
@@ -352,7 +358,7 @@ class SurgicalControlServer(Node):
         ]:
             self.add_box(name,
                          (TRAY_CENTRE_X, TRAY_CENTRE_Y + y_offset,
-                          TRAY_Z + INST_H),
+                          TRAY_Z + 0.010),
                          inst_size)
 
         self.get_logger().info('=== Scene ready ===')
@@ -409,8 +415,7 @@ class SurgicalControlServer(Node):
         goal.planning_options.plan_only = False
         goal.planning_options.replan = False
 
-        self.get_logger().info(
-            f'  [{planner} {int(vel*100)}%] → ({x:.4f}, {y:.4f}, {z:.4f}) m')
+        self.get_logger().info(f'  [{planner} {int(vel*100)}%] → ({x:.4f}, {y:.4f}, {z:.4f}) m')
         goal_handle = await self._move_client.send_goal_async(goal)
         if not goal_handle.accepted:
             self.get_logger().error('  Goal REJECTED by MoveGroup')
