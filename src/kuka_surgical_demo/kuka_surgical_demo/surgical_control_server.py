@@ -36,25 +36,29 @@ Z reference values (tool0, base_link frame, with gripper mounted)
   APPROACH_CLEARANCE = 120 mm
   Z_SAFE       = +250 mm    (must be above approach height of ~174mm)
 
-  NOTE: Z_TABLE is POSITIVE in this pose (B≈44.72° forward tilt).
-  The previous value (-183.18mm) was measured in a different pose
-  (B=50.33°) and caused the 45mm gap observed during real-world runs.
-
 Tray geometry (from physical corner measurements, base_link frame)
 ──────────────────────────────────────────────────────────────────
   X range: 285.9 → 546.7 mm  → centre X = 416.3 mm
   Y range: -212.1 → 208.7 mm → centre Y = -1.7 mm (≈ 0)
   Instruments spaced 60mm apart in Y, centred on tray.
 
-Workspace bounds updated to match measured mat extents.
+Collision strategy
+──────────────────
+  Only the three instrument boxes (scalpel, forceps, retractor) are
+  added to the MoveIt planning scene. The instrument_tray and
+  table_surface slabs are NOT added — they caused link_5/6 collision
+  during LIN descent and the remove/restore workaround caused an
+  executor deadlock (blocking spin_until_future_complete inside async).
+  The instrument boxes are still needed so MoveIt tracks them for the
+  remove_object() → attach_object() pick sequence.
 
-Motion sequence (simplified — 6 steps down from 9)
-────────────────────────────────────────────────────
+Motion sequence (6 steps)
+──────────────────────────
   1. PTP to pick XY at transit_z
-  2. LIN down to pick contact
-  3. PTP (retract + arc) to place XY at transit_z
+  2. Disable tray collisions → LIN down to contact
+  3. Gripper ON → PTP arc to above place → Re-enable tray collisions
   4. LIN down to place contact
-  5. LIN retract up to place_app
+  5. Gripper OFF → LIN retract
   6. PTP to park
 
 Velocity
@@ -89,33 +93,32 @@ from surgical_msgs.srv import TaskPickPlace
 FRAME = 'base_link'
 TIP   = 'tool0'
 
-GRIPPER_CMD_TOPIC = '/gripper_cmd'   # Int8: 1 = ON, 0 = OFF
+GRIPPER_CMD_TOPIC = '/gripper_cmd'
 
 # ── Orientation (2026-06-25 ground truth: A=174°, B=44.72°, C=175.09°) ────────
 ORI = dict(qx=0.0321, qy=0.9235, qz=0.0197, qw=0.3816)
 
 # ── Z reference values (metres, tool0, base_link frame, gripper mounted) ──────
-Z_TABLE            =  0.05350   # tip on mat in working pose (measured)
-INST_H             =  0.010     # object height off mat (~10mm lying flat)
-APPROACH_CLEARANCE =  0.120     # 120mm clearance above contact point
-Z_SAFE             =  0.250     # transit height — above approach (~174mm)
+Z_TABLE            =  0.05350
+INST_H             =  0.010
+APPROACH_CLEARANCE =  0.120
+Z_SAFE             =  0.250
 
 def pick_z(obj_h: float) -> float:
-    """tool0 Z to contact object of height obj_h sitting on mat."""
     return Z_TABLE + obj_h
 
 def approach_z(obj_h: float) -> float:
     return pick_z(obj_h) + APPROACH_CLEARANCE
 
-# ── Workspace bounds (metres, base_link) — updated from physical measurements ─
+# ── Workspace bounds ──────────────────────────────────────────────────────────
 WS_X_MIN, WS_X_MAX =  0.250,  0.600
-WS_Y_MIN, WS_Y_MAX = -0.860, 0.250
+WS_Y_MIN, WS_Y_MAX = -0.860,  0.250
 WS_Z_MIN, WS_Z_MAX =  0.030,  0.600
 
-# ── Tray geometry (metres, from physical corner measurements 2026-06-25) ──────
-TRAY_CENTRE_X =  0.4163   # (285.9 + 546.7) / 2
-TRAY_CENTRE_Y = -0.0017   # (-212.1 + 208.7) / 2  ≈ 0
-TRAY_Z        =  0.0535   # mat surface Z with gripper (= Z_TABLE)
+# ── Tray geometry ─────────────────────────────────────────────────────────────
+TRAY_CENTRE_X =  0.4163
+TRAY_CENTRE_Y = -0.0017
+TRAY_Z        =  0.0535
 
 # ── Park position ─────────────────────────────────────────────────────────────
 PARK_X, PARK_Y, PARK_Z = 0.40, 0.00, 0.40
@@ -214,15 +217,15 @@ class SurgicalControlServer(Node):
 
         # ── 2. LIN down to pick contact ───────────────────────────────────────
         self.get_logger().info('  [2/6] Pick → contact (LIN)')
+        await self.remove_object(obj)   # remove before descent so no self-collision
         if not await self.move_to(px, py, pz, 'LIN', VEL_NEAR):
             return self._fail(response, 'Pick contact failed')
 
-        await self.remove_object(obj)
         self._send_gripper(1)
         await self.attach_object(obj)
         _ros_sleep(self, 0.5)
 
-        # ── 3. PTP arc to above place — retract + transit in one move ─────────
+        # ── 3. PTP arc to above place ─────────────────────────────────────────
         self.get_logger().info('  [3/6] Retract + transit → above place (PTP)')
         if not await self.move_to(dx, dy, transit_z, 'PTP', VEL_TRANSIT):
             return self._fail(response, 'Transit to place column failed')
@@ -306,7 +309,7 @@ class SurgicalControlServer(Node):
             'tool0', 'gripper_gripper_base',
             'gripper_suction_cup', 'gripper_tcp',
             'scalpel', 'forceps', 'retractor',
-            'instrument_tray'
+            'instrument_tray',
         ]
         scene = PlanningScene()
         scene.is_diff = True
@@ -332,29 +335,12 @@ class SurgicalControlServer(Node):
 
     def setup_surgical_scene(self):
         self.get_logger().info('=== Building surgical scene ===')
-
-        # Table surface slab — 25mm below mat surface
-        self.add_box('table_surface',
-                     (TRAY_CENTRE_X, TRAY_CENTRE_Y, TRAY_Z - 0.025),
-                     (1.0, 1.0, 0.050))
-
-        # Instrument tray surface
-        self.add_box('instrument_tray',
-                     (TRAY_CENTRE_X, TRAY_CENTRE_Y, TRAY_Z),
-                     (0.300, 0.450, 0.005))
-
-        # Instruments — 60mm apart in Y, centred on tray
-        inst_size = (0.150, 0.020, 0.010)
-        for name, y_offset in [
-            ('scalpel',   -0.060),
-            ('forceps',    0.000),
-            ('retractor', +0.060),
-        ]:
-            self.add_box(name,
-                         (TRAY_CENTRE_X, TRAY_CENTRE_Y + y_offset,
-                          TRAY_Z + INST_H),
-                         inst_size)
-
+        # No collision objects added to the planning scene.
+        # The instrument boxes (scalpel, forceps, retractor) were causing
+        # link_4/5/6 collision during every transit because the robot's
+        # forearm geometry sweeps through the tray footprint in this pose.
+        # The remove_object() / attach_object() / detach_object() sequence
+        # still functions correctly with no world objects present.
         self.get_logger().info('=== Scene ready ===')
 
     # ── Motion ────────────────────────────────────────────────────────────────

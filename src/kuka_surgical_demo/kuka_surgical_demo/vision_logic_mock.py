@@ -67,7 +67,7 @@ STORAGE_COORDS = {
 # Centre from physical measurement. Instruments spaced 60mm apart in Y.
 # Y goes further negative for each instrument to keep them separated.
 HANDOFF_COORDS = {
-    'scalpel':   (HANDOFF_X, HANDOFF_Y - 0.060,  HANDOFF_Z),
+    'scalpel':   (HANDOFF_X, HANDOFF_Y - 0.060, HANDOFF_Z),
     'forceps':   (HANDOFF_X, HANDOFF_Y,          HANDOFF_Z),
     'retractor': (HANDOFF_X, HANDOFF_Y + 0.060,  HANDOFF_Z),
 }
